@@ -1,0 +1,488 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { apiClient } from "../../lib/apiClient";
+import { useAuth } from "../../context/AuthContext";
+import { useCart, type CartLine } from "../../context/CartContext";
+import { useToast } from "../../context/ToastContext";
+import { Navbar } from "../../components/Navbar";
+import { Button, EmptyState, Stepper } from "../../components/ui";
+import { orderErrorMessage } from "../../lib/collectionWindows";
+import { displayFeePercent, getAppConfig, platformFeeFor } from "../../lib/appConfig";
+import { rememberPendingOrders, startPayment } from "../../lib/payments";
+import type { Kitchen } from "../../types/admin";
+
+interface OrderResponse {
+  id: string;
+}
+
+/** Counter names as a student reads them on the wall, not the enum spelling. */
+const KITCHEN_LABEL: Record<Kitchen, string> = {
+  SNACKS: "Snacks counter",
+  MEALS: "Meals counter",
+};
+
+function CartIcon() {
+  return (
+    <svg className="w-7 h-7" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.5}
+        d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"
+      />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg className="w-4 h-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.75}
+        d="M12 8v4l2.5 2.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
+    </svg>
+  );
+}
+
+function SplitIcon() {
+  return (
+    <svg className="w-4 h-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.75}
+        d="M4 5h4l6 14h6M20 5h-6l-2 4.667"
+      />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg className="w-5 h-5 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.75}
+        d="M12 9v3.5m0 3.5h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+      />
+    </svg>
+  );
+}
+
+/**
+ * One receipt line.
+ *
+ * The tile is a letterform, not a photo: `CartLine` carries no `imageUrl` /
+ * `imageHash`, so handing MenuCardImage a cart line would render its
+ * "no picture" placeholder on every row — an identical column of grey squares
+ * that costs vertical space and communicates nothing. A letter at least tells
+ * two lines apart at a glance. Restore the real thumbnail by widening CartLine
+ * to carry the image ref the menu already has; this component is ready for it.
+ */
+function LineRow({
+  line,
+  index,
+  onUpdateQty,
+  onRemove,
+  listRef,
+  fallbackFocusRef,
+}: {
+  line: CartLine;
+  index: number;
+  onUpdateQty: (menuItemId: string, qty: number) => void;
+  onRemove: (menuItemId: string) => void;
+  listRef: React.RefObject<HTMLUListElement | null>;
+  fallbackFocusRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  /**
+   * Removing a line unmounts the button that has focus, and focus falls back to
+   * <body>. Hand it to a live neighbour instead — same pattern, and the same
+   * reason, as CartBar.handleDecrease.
+   */
+  function handleRemove() {
+    // Query the wrappers, then take each one's first button: Stepper owns its
+    // own markup and does not forward stray data-* attributes onto the control,
+    // so marking the wrapper is the only hook available. Grabbing the wrapper
+    // itself would be useless — focus() on a <div> is a no-op.
+    const wraps = listRef.current?.querySelectorAll<HTMLElement>("[data-checkout-step]");
+    const neighbourWrap = wraps?.[index + 1] ?? wraps?.[index - 1];
+    const neighbour = neighbourWrap?.querySelector("button");
+    onRemove(line.menuItemId);
+    if (neighbour) neighbour.focus();
+    else fallbackFocusRef.current?.focus();
+  }
+
+  return (
+    <li className="flex items-center gap-3 px-4 py-3">
+      <span
+        aria-hidden="true"
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-surface-muted text-sm font-semibold text-gray-500"
+      >
+        {line.name.charAt(0).toUpperCase()}
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium leading-snug text-gray-900">{line.name}</p>
+        <p className="mt-0.5 text-xs text-gray-500 tabular-nums">₹{line.price.toFixed(2)} each</p>
+      </div>
+
+      {/* data-checkout-step marks the control the neighbour-focus lookup walks. */}
+      <div data-checkout-step>
+        <Stepper
+          qty={line.qty}
+          max={line.stockQty}
+          itemName={line.name}
+          onChange={(next) => onUpdateQty(line.menuItemId, next)}
+          onRemove={handleRemove}
+        />
+      </div>
+
+      <span className="w-16 shrink-0 text-right text-sm font-semibold text-gray-900 tabular-nums">
+        ₹{(line.price * line.qty).toFixed(2)}
+      </span>
+    </li>
+  );
+}
+
+export function CheckoutPage() {
+  const { token, school } = useAuth();
+  const { items, updateQty, removeItem, total, clear } = useCart();
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+  const [placing, setPlacing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const payRef = useRef<HTMLButtonElement>(null);
+
+  const [paymentsOn, setPaymentsOn] = useState<boolean | null>(null);
+  const [feePercent, setFeePercent] = useState(0);
+
+  /**
+   * Asked once on mount so the pay button's label is correct before it is
+   * pressed, rather than the flow changing shape underneath the student — and
+   * so the fee is on the summary before they agree to pay it.
+   *
+   * One call for both, because both live on the same cached /config response.
+   * `school` is threaded through because the fee is per-school; a session
+   * predating that field reports null, and passing it along lets the backend
+   * apply its own KLH default rather than this page guessing one.
+   *
+   * On failure both fall back to their safe direction, and payments-off is the
+   * load-bearing one: an unreachable /config means we cannot PROVE payments are
+   * configured, and guessing "on" sends the student into a checkout that 503s
+   * after their order is already placed and holding stock. Guessing "off" costs
+   * at worst a free order during an outage — recoverable, and visible to staff
+   * on the board. The other direction strands food. The fee falls back to 0,
+   * i.e. no fee line; see displayFeePercent in lib/appConfig.ts.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    getAppConfig(school ?? undefined)
+      .then((config) => {
+        if (cancelled) return;
+        setPaymentsOn(config.paymentsEnabled === true);
+        setFeePercent(displayFeePercent(config));
+      })
+      .catch(() => {
+        if (!cancelled) setPaymentsOn(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [school]);
+
+  const itemCount = useMemo(() => items.reduce((sum, line) => sum + line.qty, 0), [items]);
+
+  // Rounded the way the backend rounds it, so the total shown here is the total
+  // charged. A 0% school produces fee === 0 and the row below is not rendered
+  // at all — no "Platform fee ₹0.00" on a summary where none applies.
+  const platformFee = platformFeeFor(total, feePercent);
+  const grandTotal = total + platformFee;
+
+  /**
+   * The backend splits a cart into one order per kitchen, which is why handlePay
+   * receives an ARRAY of orders and joins their ids. A student who ordered
+   * "one dosa and one samosa" and lands on a token page showing two tokens
+   * should have been told that before paying, not after.
+   */
+  const kitchens = useMemo(() => {
+    const seen = new Set<Kitchen>();
+    for (const line of items) if (line.kitchen) seen.add(line.kitchen);
+    return [...seen];
+  }, [items]);
+
+  /**
+   * Places the order, then sends the student to GuruPay to pay.
+   *
+   * Two steps rather than one, and in this order on purpose: the order is
+   * written and its stock reserved BEFORE any money is involved, so a student
+   * can never be charged for food that sold out while they were paying.
+   *
+   * The cart is deliberately NOT cleared before leaving. If the student
+   * abandons GuruPay's page or the payment fails, they come back to a checkout
+   * exactly as they left it, with something to retry. Only a confirmed payment
+   * clears it — and that happens on the completion page, after the server has
+   * verified the money with GuruPay.
+   */
+  async function handlePay() {
+    setPlacing(true);
+    setError(null);
+    try {
+      const orders = await apiClient.post<OrderResponse[]>(
+        "/orders",
+        { items: items.map((i) => ({ menuItemId: i.menuItemId, qty: i.qty })) },
+        token ?? undefined
+      );
+      const orderIds = orders.map((o) => o.id);
+
+      // Payments off: the order stands on its own, exactly as before.
+      if (!paymentsOn) {
+        clear();
+        showToast("Order placed successfully!", "success");
+        navigate(`/student/order/${orderIds.join(",")}`, { replace: true });
+        return;
+      }
+
+      const session = await startPayment(orderIds, { token: token ?? undefined });
+
+      // Remembered before navigating away, because this component is about to
+      // be torn down by a full page load and its state goes with it.
+      rememberPendingOrders(orderIds);
+
+      // A real navigation, not a router push: GuruPay's page is another origin.
+      // `replace` keeps the checkout out of history, so the browser Back button
+      // from GuruPay does not land on a stale cart that has already been ordered.
+      window.location.replace(session.paymentUrl);
+    } catch (err) {
+      // A checkout that failed after the orders were written leaves them
+      // awaiting payment; the backend releases them, so the cart is still good.
+      setError(orderErrorMessage(err, "Could not start your payment"));
+      setPlacing(false);
+    }
+    // No `finally`: on the success path this component is being replaced by a
+    // page load, and clearing `placing` there would flash the button back to
+    // its resting state while the browser is already navigating.
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="flex min-h-dvh flex-col page-backdrop">
+        <Navbar title="Checkout" backTo="/student" />
+        {/* Centred rather than top-aligned: an empty cart is the shortest state
+            this page has, and a single small card pinned under the navbar left
+            most of the viewport as dead grey. */}
+        <div className="mx-auto flex w-full max-w-lg flex-1 items-center justify-center p-4">
+          <div className="w-full rounded-2xl border border-border bg-surface lift-shadow">
+            <EmptyState
+              icon={<CartIcon />}
+              title="Your cart is empty"
+              description="Add something from the menu and it will show up here."
+              action={<Button onClick={() => navigate("/student")}>Browse the menu</Button>}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    // min-h-dvh, not min-h-screen: `100vh` on mobile Safari is the tall
+    // address-bar-hidden height, so the column would be ~60px taller than the
+    // visible viewport and the centring below measured against a box that does
+    // not exist. The flex column is what lets the card stack claim the space
+    // between the navbar and the pay bar.
+    <div className="flex min-h-dvh flex-col page-backdrop">
+      <Navbar title="Checkout" backTo="/student" />
+
+      {/* Two layouts, one markup.
+
+          Phone/tablet (< lg): a single max-w-lg column, vertically centred.
+          `flex-1` + `justify-center` claims whatever height is left once the
+          navbar and the sticky pay bar have taken theirs, so a one-item cart
+          sits in the middle of the page instead of clinging to the top with a
+          screenful of empty grey underneath it. `justify-center` on a flex
+          column does NOT clip an overflowing child, so a long cart simply grows
+          past the fold and scrolls normally — no max-h or overflow guard needed.
+
+          Desktop (>= lg): a 2-column grid, items left and a sticky summary rail
+          right. Centring alone was not enough here — at 2000px a 512px column is
+          a ribbon in an empty field, because the wasted space is HORIZONTAL. The
+          grid spends that width on the standard checkout shape (line items
+          beside a persistent summary) instead of padding it out, and `max-w-5xl`
+          stops the two columns drifting apart on an ultrawide.
+          `lg:items-start` is required: the default `stretch` would make the rail
+          full-height and `position: sticky` a no-op inside it. `lg:content-center`
+          is the grid-box equivalent of the flex `justify-center` above — switching
+          to `display: grid` drops flex alignment entirely, and without it a short
+          cart went back to hugging the navbar with a screen of empty page below.
+          Like justify-center it only spends slack that exists, so a tall cart is
+          unaffected and simply scrolls. */}
+      <div className="mx-auto flex w-full max-w-lg flex-1 flex-col justify-center gap-3 px-4 py-6 sm:py-10 lg:grid lg:max-w-5xl lg:grid-cols-[minmax(0,1fr)_22rem] lg:content-center lg:items-start lg:gap-6 lg:px-6">
+        <section
+          aria-labelledby="checkout-items"
+          className="overflow-hidden rounded-2xl border border-border bg-surface lift-shadow"
+        >
+          <h2
+            id="checkout-items"
+            className="border-b border-border bg-surface-muted/50 px-4 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500"
+          >
+            {itemCount} item{itemCount === 1 ? "" : "s"}
+          </h2>
+          <ul ref={listRef} className="divide-y divide-border">
+            {items.map((line, index) => (
+              <LineRow
+                key={line.menuItemId}
+                line={line}
+                index={index}
+                onUpdateQty={updateQty}
+                onRemove={removeItem}
+                listRef={listRef}
+                fallbackFocusRef={payRef}
+              />
+            ))}
+          </ul>
+        </section>
+
+        {/* `lg:sticky lg:top-24` keeps the total and the pay button in view while
+            a long list of lines scrolls past on the left. top-24 clears the
+            sticky navbar (z-40, ~4.5rem tall) rather than sliding under it. */}
+        <section
+          aria-labelledby="checkout-summary"
+          className="overflow-hidden rounded-2xl border border-border bg-surface lift-shadow lg:sticky lg:top-24"
+        >
+          {/* Visible only on desktop, where the summary is a standalone rail that
+              needs a name. On mobile it is the second of two stacked cards in an
+              obvious top-to-bottom reading order, and a heading there is noise —
+              so the accessible name stays on the sr-only element for that case. */}
+          <h2
+            id="checkout-summary"
+            className="sr-only lg:not-sr-only lg:border-b lg:border-border lg:bg-surface-muted/50 lg:px-4 lg:py-3 lg:text-xs lg:font-semibold lg:uppercase lg:tracking-wider lg:text-gray-500"
+          >
+            Order summary
+          </h2>
+
+          <dl className="space-y-2 px-4 py-4 text-sm">
+            <div className="flex justify-between text-gray-600">
+              <dt>Items</dt>
+              <dd className="tabular-nums">{itemCount}</dd>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <dt>Subtotal</dt>
+              <dd className="tabular-nums">₹{total.toFixed(2)}</dd>
+            </div>
+            {/* Its own line, never folded into the total: a charge the student
+                did not choose has to be legible as a separate thing before they
+                pay it. Rendered only when a fee actually applies. */}
+            {platformFee > 0 && (
+              <div className="flex justify-between text-gray-600">
+                <dt>Platform fee ({feePercent}%)</dt>
+                <dd className="tabular-nums">₹{platformFee.toFixed(2)}</dd>
+              </div>
+            )}
+            {/* mt-1/pt-3 rather than the pt-2 the other rows use: the total is
+                the one number on this card the student is actually agreeing to,
+                and it needs a gap above the rule as well as the rule itself to
+                stop reading as a fourth line item. */}
+            <div className="mt-1 flex items-baseline justify-between border-t border-border pt-3 text-gray-900">
+              <dt className="text-sm font-semibold">Total</dt>
+              <dd className="text-xl font-bold tabular-nums tracking-tight">₹{grandTotal.toFixed(2)}</dd>
+            </div>
+          </dl>
+
+          {/* Collection facts, stated before the pay button rather than only as a
+              post-failure error. Both are true of the request this page actually
+              sends: it omits `collectionAt`, so the order is for the current
+              15-minute slot ("as soon as possible"), and the backend splits by
+              kitchen. No slot picker is offered because nothing here books one —
+              lib/collectionWindows exposes copy and formatting, not a chooser. */}
+          {/* Tinted, so the card visibly separates "what you pay" from "what
+              happens next" without a second card and a second shadow. */}
+          <div className="space-y-2 border-t border-border bg-surface-muted/50 px-4 py-3 text-xs leading-relaxed text-gray-600">
+            <p className="flex items-start gap-2">
+              <ClockIcon />
+              <span>Collect from the counter once your token turns ready. Orders are prepared for the current slot.</span>
+            </p>
+            {kitchens.length > 1 && (
+              <p className="flex items-start gap-2">
+                <SplitIcon />
+                <span>
+                  Your cart spans two counters, so this becomes{" "}
+                  <span className="font-semibold text-gray-800">{kitchens.length} separate orders</span> — one for the{" "}
+                  {kitchens.map((k) => KITCHEN_LABEL[k].replace(" counter", "")).join(" and ")} counter. You will get a
+                  token for each.
+                </span>
+              </p>
+            )}
+          </div>
+
+        </section>
+
+        {error && (
+          <div
+            role="alert"
+            className="rise-in flex items-start gap-2.5 rounded-2xl border border-danger-100 bg-danger-50 px-4 py-3 text-sm text-danger-700 lift-shadow lg:col-span-2 lg:col-start-1"
+          >
+            <AlertIcon />
+            <div>
+              <p className="font-semibold">Payment failed</p>
+              <p className="mt-0.5 leading-relaxed">{error}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sticky, not fixed. CheckoutPage has no CartBar, so the pay bar can live
+          in the page flow and needs no row in the index.css overlay stacking
+          table. `z-30` keeps it above the scrolled card edges within its own
+          stacking context only. */}
+      {/* shadow points UP (negative y): this bar is pinned to the bottom edge, so
+          the surface it has to lift off is the page above it, not below. The
+          border alone read as a hairline seam once the cards above gained real
+          depth. */}
+      {/* One pay button at every width, deliberately.
+
+          A desktop-only copy at the foot of the summary rail was tried and
+          reverted: with the bar kept for phones that puts TWO buttons with the
+          same accessible name in the DOM, one merely display:none'd. A screen
+          reader on a wide viewport reads both — CSS visibility is not the only
+          thing that hides a control from assistive tech, but a second identical
+          "Place order" is a real ambiguity either way — and getByRole in the
+          existing checkout tests fails on the duplicate for exactly the reason a
+          user would be confused by it. Gating one on matchMedia would fix the
+          count but move a layout decision into JS and desync from the
+          breakpoint. One button, one name, one code path.
+
+          `lg:max-w-5xl` matches the grid above so the bar's contents sit under
+          the columns they belong to instead of being centred against a
+          512px-wide phantom. `lg:justify-end` parks total + button under the
+          summary rail — the column whose numbers they restate. */}
+      <div className="sticky bottom-0 z-30 mt-auto border-t border-border bg-surface/90 px-4 pb-safe pt-3 shadow-[0_-8px_24px_-12px_rgba(16,24,40,0.12)] backdrop-blur-md">
+        <div className="mx-auto flex max-w-lg items-center gap-3 lg:max-w-5xl lg:justify-end lg:gap-5 lg:px-6">
+          <div className="min-w-0">
+            <p className="text-[0.7rem] font-medium uppercase tracking-wider text-gray-500">Total</p>
+            {/* Fee-inclusive, matching the summary above and the amount the
+                server will charge. The two totals on this page must never
+                disagree — this is the one the thumb is next to. */}
+            <p className="text-lg font-bold text-gray-900 tabular-nums">₹{grandTotal.toFixed(2)}</p>
+          </div>
+          {/* flex-1 on phones so the button owns the row; a fixed 22rem at lg so
+              it lines up with the summary rail above rather than stretching to
+              the full 5xl and dwarfing the total beside it. */}
+          <Button
+            ref={payRef}
+            onClick={handlePay}
+            loading={placing}
+            size="lg"
+            className="flex-1 lg:w-[22rem] lg:flex-none"
+          >
+            {placing ? "Processing" : paymentsOn ? "Pay by UPI" : "Place order"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

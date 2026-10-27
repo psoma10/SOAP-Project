@@ -1,0 +1,42 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment variables (local secrets/config; .env.example is the tracked template)
+.env
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.superpowers/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.vercel
+.env*
+
+# Throwaway browser-driving scripts (screenshots, one-off DOM measurements).
+# They hardcode a scratch output path and a dev-server port, so they are only
+# ever meaningful to the session that wrote them.
+_*.mjs

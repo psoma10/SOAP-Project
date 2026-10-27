@@ -1,0 +1,567 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50: #fef2f2;
+  --color-brand-100: #fee2e2;
+  --color-brand-300: #fca5a5;
+  --color-brand-500: #ef4444;
+  --color-brand-600: #dc2626;
+  --color-brand-700: #b91c1c;
+  --color-brand-900: #7f1d1d;
+
+  --color-surface: #ffffff;
+  --color-surface-hover: #f9fafb;
+  --color-surface-muted: #f3f4f6;
+
+  /* Semantic status scale. Only 50/100/600/700 exist on purpose: 50/100 are the
+     two tints a pill or banner ever fills with, 600/700 the two the text or a
+     solid button ever uses. Adding the full 50-900 ramp would invite call sites
+     to pick shades that have never been contrast-checked against our surfaces.
+
+     `danger` is intentionally NOT an alias of brand-*. The brand red is the
+     app's primary action colour (Checkout, Add to cart), so reusing it for
+     destructive states would make "the main button" and "the dangerous button"
+     the same colour. danger sits a hue cooler than brand so the two read apart
+     when adjacent — see ConfirmDialog, which already hand-rolls red-700 for
+     exactly this reason. */
+  --color-success-50: #ecfdf5;
+  --color-success-100: #d1fae5;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+
+  --color-warning-50: #fffbeb;
+  --color-warning-100: #fef3c7;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-600: #e11d48;
+  --color-danger-700: #be123c;
+
+  --color-info-50: #eff6ff;
+  --color-info-100: #dbeafe;
+  --color-info-600: #2563eb;
+  --color-info-700: #1d4ed8;
+
+  /* Single neutral hairline. Every card/divider in the app currently reaches for
+     an ad-hoc gray-100/gray-200/black-5%; this is the one value they converge on
+     so a future theme has one knob to turn rather than three dozen. */
+  --color-border: #e5e7eb;
+
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+}
+
+/* ===========================================================================
+   OVERLAY STACKING ORDER — single source of truth.
+
+   Every fixed/sticky overlay in the app draws its z-index from this table.
+   Before adding a new overlay, add a row here first; do not invent a value at
+   the call site. Several of these are bottom-anchored and used to collide at a
+   shared z-50, which made the offline banner invisible and let toasts sit on
+   top of the cart's Checkout button.
+
+     z-30  Sticky category rail on the menu pages.
+     z-40  Sticky navigation bars (Navbar, GuestNav, AdminNav).
+     z-45  CartBar scrim that dims the page behind the expanded cart sheet —
+           above the nav, below the cart itself.
+     z-50  CartBar (src/components/CartBar.tsx) and the portalled admin dialogs
+           (ConfirmDialog / UserFormModal / CohortPromoteDialog). These never
+           appear at the same time, so they can share a level.
+     z-60  Toast stack (src/context/ToastContext.tsx). Above the cart so a toast
+           is never hidden by it, and lifted above the cart bar's height on
+           phones (bottom-28) so it never covers the Checkout button. Toasts
+           auto-dismiss, so they must not be the topmost thing on screen.
+     z-70  NetworkStatus offline banner (src/components/NetworkStatus.tsx).
+           Highest, and top-anchored rather than bottom-anchored, because
+           connectivity loss must stay visible over every other overlay —
+           including the cart card that used to cover it on desktop.
+
+   Keep the geometry disjoint too, not just the z-order: the cart owns the
+   bottom-right corner from `sm` up and the full bottom edge on phones.
+   =========================================================================== */
+
+/* ===========================================================================
+   TYPOGRAPHY — single source of truth.
+
+   One typeface for the whole app: Geist, loaded in index.html via Google
+   Fonts (weights 400/500/600/700). Nothing else declares font-family — do
+   not add a second @import, a per-component Google Fonts link, or an inline
+   font-family override. If a screen needs a different typeface, change it
+   here, not at the call site.
+
+   Weight scale — use Tailwind's utilities, not raw font-weight:
+     font-normal    400  Body copy, default text.
+     font-medium    500  Labels, secondary emphasis, nav items.
+     font-semibold  600  Card titles, section headings, active states.
+     font-bold      700  Page titles, prices, hero numbers.
+
+   font-mono is the one sanctioned exception — reserved for literal data that
+   benefits from fixed-width glyphs (order IDs, error stack traces), not for
+   general emphasis. See ErrorBoundary.tsx and AdminStudentsPage.tsx.
+   =========================================================================== */
+body {
+  font-family: 'Geist', system-ui, -apple-system, "Segoe UI", sans-serif;
+  background-color: #f9fafb;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------------------------------------------------------------------------
+   Custom utilities.
+
+   These are declared with `@utility` (not as bare `.class` rules) on purpose.
+   Bare rules land OUTSIDE every cascade layer, and unlayered CSS beats layered
+   CSS unconditionally — so an unlayered `.pb-safe` silently defeated `sm:pb-0`,
+   and an unlayered `.glass-panel` defeated every `border-*` and `bg-*` utility
+   placed next to it. `@utility` emits into Tailwind's `utilities` layer, where
+   ordinary utilities can override these the way anyone would expect.
+   --------------------------------------------------------------------------- */
+
+/* Keeps bottom-anchored UI clear of the iOS home indicator / Android gesture bar. */
+@utility pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+/* Longhand `border-width`/`border-style`/`border-color` rather than the `border`
+   shorthand: the shorthand resets border-color even when a `border-<color>`
+   utility is present, so `glass-panel border-gray-200/60` lost its colour.
+   `background-color` rather than `background` for the same reason — the
+   shorthand would clobber a sibling `bg-*` utility's colour. */
+@utility glass-panel {
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-width: 1px;
+  /* var() indirection is load-bearing: with three plain longhands the minifier
+     re-collapses them into the `border` shorthand, putting the reset back. */
+  border-style: var(--tw-border-style, solid);
+  border-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Centred top bar with inverted ("tab ear") corners — the bar hangs from the top
+   edge, its bottom corners are convex, and two masked pseudo-elements flare the
+   white outward at the top so the shape blends into the page instead of ending
+   in a hard vertical edge. The ears are exactly --nav-notch wide, so the shell
+   wrapper must carry at least that much horizontal padding or they clip. */
+@utility nav-notch {
+  --nav-notch: 1.75rem;
+  position: relative;
+  /* This utility owns the bar's whole surface, which is why the nav elements
+     no longer carry `glass-panel`. Trying to layer the two meant relying on
+     utility source order to beat glass-panel's 0.95 alpha, and Tailwind does
+     not guarantee that ordering — measured in the browser, glass-panel still
+     won. Opaque is also the correct look here: a bar pinned to the top edge
+     has the whole page sliding under it, and at 0.95 with a backdrop blur the
+     content ghosted through as a moving smear. Translucency reads as depth
+     over a static backdrop and as a rendering fault over a scrolling one. */
+  background-color: #ffffff;
+  border-width: 1px;
+  border-style: var(--tw-border-style, solid);
+  border-color: rgba(0, 0, 0, 0.05);
+  /* After the shorthand, never before it: `border-width` resets all four sides.
+     The bar sits flush against the viewport's top edge, where a top border is
+     just a hairline artefact. */
+  border-top-width: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-left-radius: var(--nav-notch);
+  border-bottom-right-radius: var(--nav-notch);
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    width: var(--nav-notch);
+    height: var(--nav-notch);
+    background-color: #ffffff;
+    pointer-events: none;
+  }
+
+  /* Quarter-disc punched out of the far corner leaves the concave arc. */
+  &::before {
+    left: calc(var(--nav-notch) * -1);
+    -webkit-mask-image: radial-gradient(circle var(--nav-notch) at 0 100%, transparent 99%, #000 100%);
+    mask-image: radial-gradient(circle var(--nav-notch) at 0 100%, transparent 99%, #000 100%);
+  }
+
+  &::after {
+    right: calc(var(--nav-notch) * -1);
+    -webkit-mask-image: radial-gradient(circle var(--nav-notch) at 100% 100%, transparent 99%, #000 100%);
+    mask-image: radial-gradient(circle var(--nav-notch) at 100% 100%, transparent 99%, #000 100%);
+  }
+}
+
+/* Sticky centring shell for a nav-notch bar.
+
+   The background is load-bearing, not decoration. The bar is inset by one ear
+   on each side, and without an opaque shell the page scrolled through those
+   two strips at the very top of the viewport — the bar looked detached from
+   the top edge.
+
+   It names the page-surface token rather than `inherit`: every page wrapper in
+   the app is `bg-surface-muted`, but the shell is not always its direct child
+   (the guest pages put an unstyled div in between), and `inherit` picks up
+   that transparent intermediate instead of the wrapper. */
+@utility nav-shell {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  padding-left: 1.75rem;
+  padding-right: 1.75rem;
+  background-color: var(--color-surface-muted);
+}
+
+@utility flat-shadow {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
+
+/* CARD LIFT — the one step up from `flat-shadow`, for a card that has to read as
+   the primary object on its screen rather than one of a scrolling list.
+
+   flat-shadow tops out at 5% black, which is legible when a dozen cards tile the
+   viewport and give each other edges to be read against. On a short page — the
+   checkout is the case that forced this — one or two cards float alone on
+   --color-surface-muted, and at 5% the white barely separates from the grey: the
+   page reads as unstyled rather than calm. Pair this with `border border-border`,
+   as OrderHistoryPage's row already does; the hairline does most of the
+   separating and the shadow supplies the depth. */
+@utility lift-shadow {
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 8px 16px -6px rgba(16, 24, 40, 0.08),
+    0 20px 32px -12px rgba(16, 24, 40, 0.06);
+}
+
+/* PAGE BACKDROP — a soft brand-tinted wash anchored to the top of a full-height
+   page, over the usual --color-surface-muted.
+
+   Deliberately built from `--color-brand-500` in `color-mix` rather than a
+   literal hex, so it is theme-agnostic by construction: the app ships one brand
+   ramp today (KLH and DRK differ only by logo — see components/Logo.tsx), and if
+   a per-school palette ever lands, this wash retints with it instead of pinning
+   one school's red onto both.
+
+   The alphas are single-digit percentages on purpose. This is meant to be felt
+   as "the page has a top", not seen as a gradient; anything stronger turns a
+   payment screen into a marketing hero. */
+@utility page-backdrop {
+  /* The nav-shell strip is opaque --color-surface-muted by design (the page must
+     not scroll through the notch ears), which would have cut a flat grey band
+     across the top of the wash. Repainting the shell with the identical
+     background here re-joins them, and it lines up pixel-for-pixel because
+     `background-attachment: fixed` anchors BOTH gradients to the viewport rather
+     than to each element's own box. Scoped to descendants of a page-backdrop
+     page, so every other screen keeps the plain opaque strip. */
+  & .nav-shell {
+    background-color: var(--color-surface-muted);
+    background-image: inherit;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+  }
+
+  background-color: var(--color-surface-muted);
+  background-image:
+    radial-gradient(
+      70rem 34rem at 50% -8rem,
+      color-mix(in srgb, var(--color-brand-500) 13%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40rem 26rem at 8% 6%,
+      color-mix(in srgb, var(--color-brand-500) 6%, transparent),
+      transparent 72%
+    );
+  background-repeat: no-repeat;
+  /* Fixed, so the wash stays pinned to the viewport instead of scrolling away
+     and leaving flat grey behind on a cart long enough to scroll. */
+  background-attachment: fixed;
+}
+
+@utility flat-shadow-hover {
+  transition: box-shadow 0.2s ease-in-out;
+  &:hover {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.025);
+  }
+}
+
+/* Micro-animations */
+@utility hover-scale {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  &:hover:not(:disabled) {
+    transform: scale(1.02);
+  }
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+/* PAGE-LEVEL ENTRANCE — use this, and only this, on full-page wrappers.
+   Deliberately opacity-only. This animation runs on full-page wrappers with
+   animation-fill-mode: forwards, and any transform in it — even `none`, which
+   Chrome resolves to an identity matrix — makes the wrapper the containing block
+   for every `position: fixed` descendant. That is what pinned the floating cart
+   to the bottom of the document instead of the viewport. Page-level fades must
+   never animate transform; use .rise-in or .sheet-up on small, non-wrapping
+   elements instead. */
+@utility fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* SMALL-ELEMENT ENTRANCE — opacity plus a short rise.
+   Only for leaf-ish elements that contain no `position: fixed` descendants:
+   dropdown menus, toasts, banners, inline status cards. It animates `transform`,
+   so an element carrying `.rise-in` becomes the containing block for any fixed
+   child while the animation's fill holds. Never put it on a page wrapper or on
+   anything that renders the CartBar / a fixed overlay inside itself — use
+   `.fade-in` there. */
+@utility rise-in {
+  animation: riseIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Same containing-block caveat as .rise-in: small, non-wrapping elements only. */
+@utility sheet-up {
+  animation: sheetUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes sheetUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@utility count-pop {
+  animation: countPop 0.28s ease-out;
+}
+
+@keyframes countPop {
+  0% { transform: none; }
+  40% { transform: scale(1.18); }
+  100% { transform: none; }
+}
+
+/* Intentionally unlayered so it outranks the utilities above — a reduced-motion
+   preference must win no matter what utility order the build produces. */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .rise-in,
+  .sheet-up,
+  .count-pop {
+    animation: none;
+  }
+
+  /* Covers the Tailwind scale/rotate microinteractions too, not just the keyframes. */
+  .hover-scale,
+  [class*="scale-"],
+  [class*="rotate-"] {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Search input — clear with dissolve (t-clear).
+
+   The wrapper owns the field's box (border, radius, padding, surface); the
+   real <input> inside is transparent and unpadded so the mirror, the fake
+   placeholder and the glow layer can stack on the exact same text origin
+   (`padding: inherit` on an `inset: 0` absolute child lands on the input's
+   content box).
+
+   Only the resting state and the tuning variables live here. The transition
+   itself is per-frame JS in src/components/SearchInput.tsx: the streak's
+   rise/peak/fall envelope is not expressible as a static @keyframes, and the
+   per-word radial-gradient stack has to be measured from the rendered mirror.
+   JS reads these variables back with getComputedStyle, so tweaking a number
+   here changes the next clear without touching the component.
+   --------------------------------------------------------------------------- */
+:root {
+  --clear-dur: 1000ms;
+  --clear-out-dur: 400ms;
+  --clear-in-dur: 400ms;
+  --clear-out-fly: 12px;
+  --clear-in-fly: 12px;
+  --clear-blur: 2px;
+  --glow-delay: 50ms;
+  --glow-peak-at: 0.15;
+  --glow-opacity: 0.45;
+  --glow-spread: 1.5;
+  --glow-stagger: 70ms;
+}
+
+.t-clear {
+  position: relative;
+  overflow: hidden;
+}
+
+.t-clear > input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+.t-clear > input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.t-clear-mirror,
+.t-clear-placeholder {
+  position: absolute;
+  inset: 0;
+  padding: inherit;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  z-index: 2;
+}
+
+/* Text runs under the clear button rather than stopping at it — overflow
+   clips at the padding box, not the content box — so the last few characters
+   are faded out instead of colliding with the chip. */
+.t-clear-mirror,
+.t-clear-placeholder {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent calc(100% - 1.5rem));
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent calc(100% - 1.5rem));
+}
+
+.t-clear-mirror { opacity: 0; }
+.t-clear.has-value .t-clear-mirror,
+.t-clear.is-clearing .t-clear-mirror { opacity: 1; }
+
+/* While the mirror owns the glyphs, the input must not draw its own or the
+   text double-renders behind the fly-up. */
+.t-clear.has-value > input,
+.t-clear.is-clearing > input {
+  -webkit-text-fill-color: transparent;
+}
+
+.t-clear.has-value .t-clear-placeholder { opacity: 0; }
+
+/* JS writes a stack of radial-gradient() layers in here during a clear, one
+   streak per word, and animates their alpha. multiply darkens the field and
+   the hairline border underneath it. */
+.t-clear-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 3;
+  mix-blend-mode: multiply;
+}
+
+.t-clear-btn {
+  z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out, color 150ms ease-out;
+}
+.t-clear.has-value .t-clear-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-clear-glow { opacity: 0 !important; }
+  .t-clear-btn { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Spinning counter (t-reel).
+
+   One .t-reel-col per digit, each clipping a strip (.t-reel-strip) of 0-9
+   cells. The strip starts parked on its own digit and is translated up by
+   (spins * 10 + digit) cells, so it spins whole loops and lands back on the
+   number it was already showing — which is what lets the resting, unrevealed
+   state be the real number under a blur rather than a placeholder.
+
+   The streak is a directional SVG feGaussianBlur (stdDeviation="0 Y"): CSS
+   blur() is isotropic and would smear the digits sideways. Timing lives here;
+   the per-column transform and the blur decay are driven from
+   src/components/TokenReel.tsx, which reads these variables back with
+   getComputedStyle — retune a number here and the next reveal picks it up.
+   --------------------------------------------------------------------------- */
+:root {
+  --reel-dur: 1400ms;
+  --reel-cell: 30px;
+  --reel-spin-blur: 3px;
+  --reel-stagger: 90ms;
+  --reel-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Resting blur on an unrevealed token. In em so it tracks the type scale. */
+  --reel-hide-blur: 0.11em;
+}
+
+.t-reel {
+  display: inline-flex;
+  align-items: center;
+  height: var(--reel-cell);
+  font-variant-numeric: tabular-nums;
+}
+
+.t-reel-col {
+  position: relative;
+  height: var(--reel-cell);
+  overflow: hidden;
+  /* Soft-fade the window edges instead of hard-cropping. The stops sit clear
+     of the glyph box (see --reel-cell below) so a settled digit is never
+     touched by the fade. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 15%, #000 85%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 15%, #000 85%, transparent 100%);
+}
+
+.t-reel-strip {
+  display: flex;
+  flex-direction: column;
+  will-change: transform, filter;
+}
+
+.t-reel-digit {
+  height: var(--reel-cell);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* Anything that isn't a digit (a separator, say) rides along without a reel. */
+.t-reel-static {
+  display: flex;
+  align-items: center;
+  height: var(--reel-cell);
+}
+
+/* Hero sizing: the cell tracks the font size and is deliberately taller than
+   the glyph, so the mask's fade zone lands in empty space. */
+.t-reel--token { --reel-cell: 1.3em; }
+
+/* Unrevealed: the real number, blurred well past reading. Isotropic on
+   purpose — this one is concealment, not motion. It sits on the root and not
+   on each strip because a per-column blur gets clipped by that column's
+   overflow, leaving hard seams between the digits. */
+.t-reel--hidden { filter: blur(var(--reel-hide-blur)); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The reveal still happens, it just arrives instead of spinning. The
+     concealing blur is not motion, so it is left alone. */
+  .t-reel-strip { transition: none !important; }
+  .t-reel--spinning .t-reel-strip { filter: none !important; }
+}
