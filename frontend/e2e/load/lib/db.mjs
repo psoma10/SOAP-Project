@@ -1,6 +1,6 @@
 // Read-only user lookups for offline token minting.
 //
-// Uses the Neon serverless driver that Canteen-Backend already depends on
+// Uses the Neon serverless driver that backend already depends on
 // (resolved by absolute path, so the frontend gains no new npm dependency),
 // and falls back to Prisma if the driver is unavailable. STRICTLY SELECTs —
 // this harness never writes to the database directly.
@@ -9,9 +9,9 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { REPO_ROOT } from "./env.mjs";
 
-const NEON_ENTRY = resolve(REPO_ROOT, "Canteen-Backend/node_modules/@neondatabase/serverless/index.mjs");
-const PRISMA_ENTRY = resolve(REPO_ROOT, "Canteen-Backend/node_modules/@prisma/client/default.js");
-const PRISMA_ADAPTER = resolve(REPO_ROOT, "Canteen-Backend/node_modules/@prisma/adapter-neon/dist/index.mjs");
+const NEON_ENTRY = resolve(REPO_ROOT, "backend/node_modules/@neondatabase/serverless/index.mjs");
+const PRISMA_ENTRY = resolve(REPO_ROOT, "backend/node_modules/@prisma/client/default.js");
+const PRISMA_ADAPTER = resolve(REPO_ROOT, "backend/node_modules/@prisma/adapter-neon/dist/index.mjs");
 
 async function neonQuery(databaseUrl) {
   if (!existsSync(NEON_ENTRY)) return null;
@@ -71,6 +71,6 @@ export async function openDb(databaseUrl) {
   throw new Error(
     `Could not open a database client for offline token minting.\n` +
       (errors.length ? `  ${errors.join("\n  ")}\n` : "") +
-      `Install Canteen-Backend dependencies, or run with --login.`
+      `Install backend dependencies, or run with --login.`
   );
 }

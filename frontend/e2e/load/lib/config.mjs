@@ -48,7 +48,7 @@ College Canteen Pre-Ordering App — concurrent order load / demo harness
 
 Auth modes
   (default)              Mint JWTs offline from the DB + JWT_SECRET in
-                         Canteen-Backend/.env. Never touches /auth/login,
+                         backend/.env. Never touches /auth/login,
                          so the login rate limiter cannot break the demo.
   --login                Use the real POST /auth/login endpoint instead.
   --refresh-tokens       Ignore the local token cache and re-mint.

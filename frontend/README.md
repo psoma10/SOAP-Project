@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Requires the backend (klh-canteen-backend) running locally.
+Requires the backend (`backend/`) running locally.
 
 ## Deploy (Vercel)
 

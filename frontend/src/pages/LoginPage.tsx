@@ -178,7 +178,7 @@ function KlhGoogleSetupForm({
    Every credential below matches a row seedAdmin.ts actually writes. */
 const SHOW_DEMO_LOGINS = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_LOGINS === "true";
 
-/** Matches Canteen-Backend/scripts/seedStudent.ts and seedAdmin.ts defaults. */
+/** Matches backend/scripts/seedStudent.ts and seedAdmin.ts defaults. */
 const KLH_DEMO_ACCOUNTS: { label: string; identifier: string; password: string }[] = [
   { label: "Student account", identifier: "student@klh.edu.in", password: "student123" },
   { label: "Admin account", identifier: "admin@klh.edu.in", password: "changeme123" },

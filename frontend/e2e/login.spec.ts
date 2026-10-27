@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 /**
  * Regression coverage for the CORS bug that broke POST /auth/login:
- *  - CORS_ORIGIN in Canteen-Backend/.env was hardcoded to a prod URL instead of "*".
+ *  - CORS_ORIGIN in backend/.env was hardcoded to a prod URL instead of "*".
  *  - app.onError() returned a raw Response bypassing the CORS middleware, so ANY
  *    error response (401/400/etc.) was missing Access-Control-Allow-Origin even
  *    though success responses had it.

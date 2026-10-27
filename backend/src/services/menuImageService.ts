@@ -1,7 +1,7 @@
 /**
  * Validates and stores admin-uploaded menu item photos.
  *
- * The client (Canteen-Frontend/src/lib/imageEncode.ts) is the source of
+ * The client (frontend/src/lib/imageEncode.ts) is the source of
  * truth for resizing/compression — Workers has no native image library and
  * bundling a WASM codec risks the 3MB/10MB deploy limit for every route in
  * this backend, not just this one. This service therefore never decodes an

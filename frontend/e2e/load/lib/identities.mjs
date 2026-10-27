@@ -1,6 +1,6 @@
 // Token acquisition for the virtual students.
 //
-//   mint  (default) — read DATABASE_URL + JWT_SECRET from Canteen-Backend/.env,
+//   mint  (default) — read DATABASE_URL + JWT_SECRET from backend/.env,
 //                     SELECT the student rows, and sign HS256 tokens locally
 //                     with the same claims as src/lib/jwt.ts. Zero calls to
 //                     /auth/login, so the login rate limiter is irrelevant.

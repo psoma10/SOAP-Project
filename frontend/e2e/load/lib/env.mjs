@@ -1,14 +1,14 @@
-// Reads DATABASE_URL / JWT_SECRET out of Canteen-Backend/.env without dotenv.
+// Reads DATABASE_URL / JWT_SECRET out of backend/.env without dotenv.
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// e2e/load/lib -> e2e/load -> e2e -> Canteen-Frontend -> KLH-Canteen
+// e2e/load/lib -> e2e/load -> e2e -> frontend -> project root
 const REPO_ROOT = resolve(HERE, "../../../..");
 
 export const BACKEND_ENV_PATH =
-  process.env.LOAD_BACKEND_ENV || resolve(REPO_ROOT, "Canteen-Backend/.env");
+  process.env.LOAD_BACKEND_ENV || resolve(REPO_ROOT, "backend/.env");
 
 function parseDotenv(text) {
   const out = {};
