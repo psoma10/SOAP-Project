@@ -1,0 +1,118 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "klh-canteen-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Plain, non-sensitive vars. CORS_ORIGIN is not secret so it lives here —
+  // override per-environment with `wrangler secret put CORS_ORIGIN` isn't
+  // needed, but you can still edit this value directly for prod vs staging.
+  "vars": {
+    "CORS_ORIGIN": "https://rajasbakery.in,https://www.rajasbakery.in",
+    // Arms the forced-password-change gate: a user with
+    // User.mustChangePassword is refused by requireAuth() everywhere except
+    // the endpoints that let them clear it. Set to "false" ONLY as an
+    // emergency escape hatch — chiefly if the offline load-testing harness
+    // ever finds itself holding tokens for flagged accounts — since it
+    // disarms the gate for every account at once.
+    "ENFORCE_PASSWORD_CHANGE": "true",
+    // Public OAuth Web client IDs for "Sign in with Google", one per school —
+    // separate GCP projects so either can be rotated independently. Safe
+    // alongside CORS_ORIGIN since both ship inside the frontend bundle anyway.
+    "GOOGLE_CLIENT_ID_DRK": "507951128349-cm98276rmlkb7a399jphh22q5pfen5jb.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_ID_KLH": "727192692226-8ediihrs6go72ltd20mlrh4kgu8daioq.apps.googleusercontent.com",
+    // Walk-up guest sign-in. A THIRD OAuth client, separate from the two
+    // student ones above: the ID token's `aud` is checked against this value,
+    // which is what stops a student token being replayed as a guest session.
+    "GOOGLE_CLIENT_ID_GUEST": "507951128349-7i31je511nega9ruvngftgvpa58rav4c.apps.googleusercontent.com",
+    // UPI payments master switch. "false" leaves ordering exactly as it was
+    // before payments existed; "true" makes checkout require payment. Flip it
+    // only after GURUPAY_API_KEY below is set — paymentsEnabled() requires
+    // both the flag and the credential, so a flag-only deploy presents no
+    // checkout rather than one that cannot settle.
+    //
+    // IMPORTANT — GATEWAY SWAP IN PROGRESS: this was "true" under SafeUPI.
+    // The moment this deploys, GURUPAY_API_KEY must already be set via
+    // `wrangler secret put` (the old SAFEUPI_* secrets are not read by this
+    // code any more), or paymentsEnabled() reads as off and checkout 503s —
+    // a safe failure, but payments go dark until the new key is in place.
+    // Test with a real ₹1 order before trusting it.
+    "PAYMENTS_ENABLED": "true",
+    // Where GuruPay returns the student's browser after the hosted payment
+    // page. A public frontend URL, so it belongs in vars rather than a secret.
+    // The payment id is appended as a query parameter at create time.
+    //
+    // This is the DEPLOYED frontend, not a dev server: GuruPay redirects a
+    // real browser here from its own origin, so a localhost value would
+    // strand every student on a page their phone cannot reach. Local
+    // development overrides it through .env instead of editing this file.
+    // www, not the bare domain: rajasbakery.in 308-redirects to www, and an
+    // extra hop through a UPI app's in-app browser is where a query string
+    // goes missing — which would strip the ?payment= id the completion page
+    // needs to know which payment to confirm.
+    "GURUPAY_REDIRECT_URL": "https://www.rajasbakery.in/payment/complete"
+  },
+
+  // Sensitive values are NOT set here. Before first deploy, run:
+  //   wrangler secret put DATABASE_URL
+  //   wrangler secret put JWT_SECRET
+  //   wrangler secret put QR_TOKEN_SECRET
+  //   wrangler secret put TELEGRAM_BOT_TOKEN
+  //   wrangler secret put TELEGRAM_BOT_USERNAME
+  //   wrangler secret put TELEGRAM_WEBHOOK_SECRET
+  //   wrangler secret put GURUPAY_API_KEY
+  // These populate env.* at runtime without ever being committed to source control.
+  //
+  // GuruPay signs nothing — its webhook carries no secret or signature of any
+  // kind, unlike SafeUPI's old shared-secret-in-body scheme. So there is no
+  // GURUPAY_WEBHOOK_SECRET to set: the webhook payload is trusted for nothing
+  // beyond which payment to look up, and every settlement is decided solely
+  // by calling GuruPay's own check-status API before food is released.
+
+  // Retained only for any non-rate-limit use. Rate limit counters moved off
+  // KV to the RATE_LIMITER_HUB Durable Object below: KV's get-then-put is not
+  // atomic, so concurrent callers all read the same value and all passed.
+  // Fill in `id` after running:
+  //   wrangler kv namespace create RATE_LIMIT_KV
+  "kv_namespaces": [
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "c0dbc558e4d74386a0c59a4b022b84bc"
+    }
+  ],
+
+  // Durable Object hub backing real-time SSE broadcast (MENU_UPDATE,
+  // ORDER_BOARD_UPDATE, per-user ORDER_UPDATE). One instance holds all live
+  // /events/stream connections since a DO is a single durable process.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ORDER_EVENTS_HUB",
+        "class_name": "OrderEventsHub"
+      },
+      // Atomic fixed-window rate limit counters (identity-keyed: JWT subject
+      // on authenticated routes, submitted campus ID at login — never IP).
+      // Sharded one instance per (prefix, identity), so no single object
+      // serialises app-wide traffic.
+      {
+        "name": "RATE_LIMITER_HUB",
+        "class_name": "RateLimiterHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["OrderEventsHub"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RateLimiterHub"]
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

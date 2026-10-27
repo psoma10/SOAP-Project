@@ -1,0 +1,275 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import type { MiddlewareHandler } from "hono";
+import {
+  createOrder,
+  getGuestOrders,
+  getOrderForGuest,
+  getCollectionWindows,
+  MAX_PREBOOK_DAYS,
+} from "../services/orderService.js";
+import { issueGuestSession, verifyGuestSession } from "../services/guestSessionService.js";
+import { paymentsEnabled } from "../services/paymentService.js";
+import { loginGuestWithGoogle } from "../services/googleGuestService.js";
+import { emitOrderCreated } from "../services/sseService.js";
+import { toOrderSummary } from "../lib/orderSummary.js";
+import { getBindings, getRequestPool } from "../lib/context.js";
+import { rateLimit } from "../middleware/rateLimit.js";
+import { ApiError } from "../middleware/errorHandler.js";
+import type { AppEnv } from "../types.js";
+
+/**
+ * Walk-up guest ordering: staff scan a printed QR at the counter, browse,
+ * pay, collect. No account, no login, no roll number.
+ *
+ * SECURITY MODEL — the whole point of this router
+ * A guest holds a signed session token and nothing else. It proves only
+ * "I am the session that placed these orders". Therefore:
+ *
+ *   - there is NO endpoint here that lists orders across sessions, and none
+ *     that reads an order by id alone;
+ *   - every read passes the session id into the query's WHERE clause
+ *     (getGuestOrders / getOrderForGuest), exactly as the student routes pass
+ *     studentId — ownership is a predicate, never a post-filter;
+ *   - a guest asking for someone else's order id gets the same 404 as one
+ *     asking for an id that does not exist, so the endpoint cannot be used to
+ *     probe which orders exist.
+ *
+ * The session id is only ever read back out of a verified HMAC. It is never
+ * accepted as a plain request parameter, which is what would turn it from an
+ * unforgeable key into an enumerable one.
+ */
+export const guestRouter = new Hono<AppEnv>();
+
+const GUEST_SESSION_HEADER = "X-Guest-Session";
+
+declare module "hono" {
+  interface ContextVariableMap {
+    guestSessionId?: string;
+  }
+}
+
+/**
+ * Recovers and verifies the caller's guest session, or refuses the request.
+ * Nothing downstream may read a session id from anywhere else.
+ */
+const requireGuestSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const header = c.req.header(GUEST_SESSION_HEADER);
+  const authHeader = c.req.header("Authorization");
+  const token = header || (authHeader?.startsWith("Guest ") ? authHeader.slice(6) : "");
+
+  if (!token) {
+    throw new ApiError(401, "NO_GUEST_SESSION", `Missing ${GUEST_SESSION_HEADER} header`);
+  }
+
+  const { QR_TOKEN_SECRET } = getBindings(c);
+  const sessionId = verifyGuestSession(token, QR_TOKEN_SECRET);
+  if (!sessionId) {
+    throw new ApiError(401, "INVALID_GUEST_SESSION", "Guest session is invalid or has expired");
+  }
+
+  c.set("guestSessionId", sessionId);
+  await next();
+};
+
+/**
+ * Keyed on the verified session id, never on anything the caller can pick
+ * freely — an attacker-chosen key would let one client spread its traffic
+ * across unlimited buckets. "reject" is safe for the same reason: a guest
+ * cannot mint a session id belonging to someone else and lock them out.
+ */
+const guestOrderLimiter = rateLimit({
+  prefix: "guest-orders",
+  windowSeconds: 60,
+  max: 5,
+  keyFn: (c) => {
+    const sessionId = c.get("guestSessionId");
+    return sessionId ? `g:${sessionId}` : null;
+  },
+  code: "TOO_MANY_ORDERS",
+  message: "Too many orders placed, please wait a minute.",
+});
+
+const googleGuestSchema = z.object({ idToken: z.string().min(1) });
+
+/**
+ * Guards the Google guest sign-in, which unlike the anonymous mint does real
+ * work per call (an outbound fetch to Google's tokeninfo endpoint).
+ *
+ * Keyed on a hash of the submitted ID token, because that is the only stable
+ * thing available before verification — there is no session and no account
+ * yet. That makes the key attacker-suppliable in principle, but it is only
+ * ever their OWN token: replaying one token repeatedly throttles that token
+ * and nothing else, and it cannot be used to lock a victim out of signing in,
+ * since a different person's sign-in carries a different token. "reject" is
+ * therefore safe here.
+ *
+ * The window is generous: a guest legitimately re-signs-in whenever their
+ * session expires, and Google's own button may hand back the same token twice
+ * during a retry.
+ */
+const googleSessionLimiter = rateLimit({
+  prefix: "guest-google",
+  windowSeconds: 60,
+  max: 10,
+  keyFn: async (c) => {
+    try {
+      const body = googleGuestSchema.safeParse(await c.req.json());
+      if (!body.success) return null;
+      // Hashed rather than raw: the key is used to name a Durable Object, and
+      // an ID token is a credential that should not be spelled into an
+      // object name or anything that logs one.
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(body.data.idToken)
+      );
+      return `t:${[...new Uint8Array(digest).slice(0, 16)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+    } catch {
+      return null;
+    }
+  },
+  code: "TOO_MANY_REQUESTS",
+  message: "Too many sign-in attempts, please wait a minute.",
+});
+
+// Prisma's Decimal.toJSON() drops trailing zeros ("20.00" -> "20"). Match the
+// student routes and pin money to a fixed 2-decimal string at the boundary.
+function serializeOrder<T extends { totalAmount: unknown; items: { priceAtOrder: unknown }[] }>(order: T) {
+  return {
+    ...order,
+    totalAmount: Number(order.totalAmount).toFixed(2),
+    orderNumber: (order as any).orderNumber,
+    items: order.items.map((item) => ({
+      ...item,
+      priceAtOrder: Number(item.priceAtOrder).toFixed(2),
+    })),
+    // The session id is the guest's bearer key. It is never echoed back in a
+    // response body, where it would end up in logs and screenshots.
+    guestSessionId: undefined,
+    // Opaque row key with no reader outside the database.
+    token: undefined,
+  };
+}
+
+/**
+ * Mints a fresh guest session. Deliberately unauthenticated — that is the
+ * entry point for someone who has just scanned the printed counter QR.
+ * Volumetric abuse of this route is an edge/WAF concern (see the note in
+ * middleware/rateLimit.ts): there is no identity to key an app-level limit
+ * on yet, and the token it returns grants access to nothing that exists.
+ */
+guestRouter.post("/session", async (c) => {
+  const { QR_TOKEN_SECRET } = getBindings(c);
+  const session = issueGuestSession(QR_TOKEN_SECRET);
+  return c.json(
+    {
+      sessionToken: session.token,
+      expiresAt: session.expiresAt,
+      expiresInSeconds: session.expiresInSeconds,
+      // Send this back on every later call.
+      header: GUEST_SESSION_HEADER,
+    },
+    201,
+  );
+});
+
+/**
+ * Mints a guest session tied to a Google identity, so the ticket survives a
+ * cleared cache, a closed tab, or a different device.
+ *
+ * Still a GUEST session in every respect — no User row is created, no
+ * privilege is granted, and the returned token reads exactly the same rows an
+ * anonymous one would. The only difference is that its session id is derived
+ * from the Google subject and is therefore the same on every sign-in.
+ *
+ * Unauthenticated by necessity (this IS the sign-in), but unlike the
+ * anonymous mint it does real work per call — a fetch to Google — so it is
+ * rate limited. The limiter keys on the submitted ID token rather than an
+ * identity, which is the only thing available before verification.
+ */
+guestRouter.post("/session/google", googleSessionLimiter, async (c) => {
+  const { idToken } = googleGuestSchema.parse(await c.req.json());
+  const { QR_TOKEN_SECRET, GOOGLE_CLIENT_ID_GUEST } = getBindings(c);
+  if (!GOOGLE_CLIENT_ID_GUEST) {
+    throw new ApiError(503, "GOOGLE_NOT_CONFIGURED", "Google sign-in is not configured.");
+  }
+  const result = await loginGuestWithGoogle(GOOGLE_CLIENT_ID_GUEST, QR_TOKEN_SECRET, idToken);
+  return c.json({ ...result, header: GUEST_SESSION_HEADER }, 201);
+});
+
+const createGuestOrderSchema = z.object({
+  items: z.array(z.object({ menuItemId: z.string().uuid(), qty: z.number().int().min(1) })).min(1),
+  /** Optional — a name to call out at the counter, not an identity. */
+  guestName: z.string().trim().min(1).max(60).optional(),
+  guestPhone: z.string().trim().min(4).max(20).optional(),
+  /** Absent means "as soon as possible". */
+  collectionAt: z.string().datetime({ offset: true }).optional(),
+});
+
+guestRouter.post("/orders", requireGuestSession, guestOrderLimiter, async (c) => {
+  const body = createGuestOrderSchema.parse(await c.req.json());
+  const pool = getRequestPool(c);
+  const bindings = getBindings(c);
+  const guestSessionId = c.get("guestSessionId")!;
+
+  // Same rule as the student route: with payments on the order holds its stock
+  // but stays invisible to the kitchen until a verified webhook settles it.
+  const awaitingPayment = paymentsEnabled(bindings);
+
+  const orders = await createOrder(pool, {
+    owner: {
+      guestSessionId,
+      guestName: body.guestName ?? null,
+      guestPhone: body.guestPhone ?? null,
+    },
+    items: body.items,
+    collectionAt: body.collectionAt ? new Date(body.collectionAt) : null,
+    awaitingPayment,
+  });
+
+  // Not announced while unpaid — the board cannot see it, so a frame here would
+  // add a row that the next refetch removes. The payment webhook emits it.
+  if (!awaitingPayment) {
+    await emitOrderCreated(bindings, orders.map(toOrderSummary));
+  }
+  return c.json(orders.map(serializeOrder), 201);
+});
+
+/** This session's orders only. Scoped in the WHERE clause, not filtered after. */
+guestRouter.get("/orders", requireGuestSession, async (c) => {
+  const pool = getRequestPool(c);
+  const orders = await getGuestOrders(pool, c.get("guestSessionId")!);
+  return c.json(orders.map(serializeOrder));
+});
+
+const windowsQuerySchema = z.object({
+  kitchen: z.enum(["SNACKS", "MEALS"]),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
+});
+
+// Registered before "/orders/:id" so the literal path is not captured by the
+// id parameter.
+guestRouter.get("/collection-windows", requireGuestSession, async (c) => {
+  const { kitchen, from, to } = windowsQuerySchema.parse({
+    kitchen: c.req.query("kitchen"),
+    from: c.req.query("from"),
+    to: c.req.query("to"),
+  });
+  const pool = getRequestPool(c);
+  const fromDate = from ? new Date(from) : new Date();
+  const toDate = to ? new Date(to) : new Date(Date.now() + MAX_PREBOOK_DAYS * 24 * 60 * 60 * 1000);
+  return c.json(await getCollectionWindows(pool, kitchen, fromDate, toDate));
+});
+
+/**
+ * Status polling for one of this session's own orders. Guests have no SSE
+ * connection (that route requires a JWT), so polling here is how a guest
+ * watches their order — and it can only ever surface their own.
+ */
+guestRouter.get("/orders/:id", requireGuestSession, async (c) => {
+  const id = z.string().uuid().parse(c.req.param("id"));
+  const pool = getRequestPool(c);
+  const order = await getOrderForGuest(pool, id, c.get("guestSessionId")!);
+  return c.json(serializeOrder(order));
+});
