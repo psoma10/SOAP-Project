@@ -41,7 +41,7 @@ function floatEnv(name, fallback) {
 }
 
 const HELP = `
-KLH Canteen — concurrent order load / demo harness
+College Canteen Pre-Ordering App — concurrent order load / demo harness
 
   node e2e/load/run.mjs [options]
   npm run load -- [options]

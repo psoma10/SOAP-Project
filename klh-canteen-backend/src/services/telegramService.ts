@@ -225,7 +225,7 @@ export async function handleTelegramUpdate(
           env,
           chatIdStr,
           linked
-            ? `Linked to KLH Canteen as ${linked.rollNumber ?? "—"} (${linked.name}).`
+            ? `Linked to College Canteen Pre-Ordering App as ${linked.rollNumber ?? "—"} (${linked.name}).`
             : "This Telegram account is not linked. Open the student app → Telegram → Link."
         );
       } else {
@@ -244,7 +244,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       env,
       chatIdStr,
-      "Open the KLH Canteen student app and tap Link Telegram to get your personal link."
+      "Open the College Canteen Pre-Ordering App student app and tap Link Telegram to get your personal link."
     );
     return;
   }

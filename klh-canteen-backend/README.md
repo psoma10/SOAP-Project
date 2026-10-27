@@ -1,7 +1,7 @@
-# KLH Canteen Backend
+# College Canteen Pre-Ordering App — Backend
 
-Hono + PostgreSQL (raw SQL via `@neondatabase/serverless`) API for the KLH
-Pantry App, deployed on Cloudflare Workers.
+Hono + PostgreSQL (raw SQL via `@neondatabase/serverless`) API for the
+College Canteen Pre-Ordering App, deployed on Cloudflare Workers.
 
 ## Local dev
 

@@ -75,7 +75,7 @@ export class Reporter {
     const p = stats.percentiles();
     const finished = stats.succeeded + stats.failed;
     const fraction = totalPlanned ? finished / totalPlanned : 0;
-    const title = done ? "KLH CANTEEN · RUSH COMPLETE" : "KLH CANTEEN · LUNCH RUSH SIMULATOR";
+    const title = done ? "COLLEGE CANTEEN PRE-ORDERING APP · RUSH COMPLETE" : "COLLEGE CANTEEN PRE-ORDERING APP · LUNCH RUSH SIMULATOR";
     const clock = `${(stats.elapsedMs / 1000).toFixed(1)}s`;
     const failColor = stats.failRate > this.cfg.failThreshold ? c.red : c.green;
 
@@ -140,7 +140,7 @@ export class Reporter {
     const lines = [""];
     lines.push(`  ${c.dim("┏" + "━".repeat(WIDTH) + "┓")}`);
     lines.push(
-      `  ${c.dim("┃")} ${pad(c.bold(c.blue("KLH CANTEEN · KITCHEN BOARD WATCHER")), WIDTH - 12)}` +
+      `  ${c.dim("┃")} ${pad(c.bold(c.blue("COLLEGE CANTEEN PRE-ORDERING APP · KITCHEN BOARD WATCHER")), WIDTH - 12)}` +
         `${pad(c.dim("⏱ " + clock), 10)} ${c.dim("┃")}`
     );
     lines.push(`  ${c.dim("┗" + "━".repeat(WIDTH) + "┛")}`);

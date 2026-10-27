@@ -32,6 +32,6 @@ const ORDER_EVENTS_HUB = createNodeEventsHub();
 const fetch = (request: Request) => app.fetch(request, { ORDER_EVENTS_HUB } as never);
 
 serve({ fetch, port }, (info) => {
-  console.log(`KLH Canteen backend (plain Node) listening on port ${info.port}`);
+  console.log(`College Canteen Pre-Ordering App backend (plain Node) listening on port ${info.port}`);
   console.log(`[hub] in-process realtime hub active (SSE only, single instance)`);
 });

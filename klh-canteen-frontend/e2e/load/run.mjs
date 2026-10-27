@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// KLH Canteen — concurrent order load / demo harness.
+// College Canteen Pre-Ordering App — concurrent order load / demo harness.
 //
 //   npm run load                      25 students, tokens minted offline
 //   npm run load -- --watch-admin     …plus a live kitchen-board watcher
@@ -73,7 +73,7 @@ async function main() {
     return EXIT_OK;
   }
 
-  process.stdout.write(`\n  ${c.bold(c.magenta("KLH CANTEEN LOAD HARNESS"))}\n`);
+  process.stdout.write(`\n  ${c.bold(c.magenta("COLLEGE CANTEEN PRE-ORDERING APP LOAD HARNESS"))}\n`);
   log(`api ${cfg.api}`);
   if (cfg.spoofIp) log("per-student X-Forwarded-For / CF-Connecting-IP spoofing ON (spreads the per-IP rate limiter)");
   else log("ip spoofing OFF — the per-IP rate limiter will throttle this run");

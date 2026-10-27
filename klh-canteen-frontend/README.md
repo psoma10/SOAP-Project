@@ -1,6 +1,6 @@
-# KLH Canteen Frontend
+# College Canteen Pre-Ordering App — Frontend
 
-React + Vite + TailwindCSS frontend for the KLH Pantry App.
+React + Vite + TailwindCSS frontend for the College Canteen Pre-Ordering App.
 
 ## Local dev
 
